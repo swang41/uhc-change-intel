@@ -1,0 +1,5 @@
+# env files
+/config/.env
+/config/.env.local
+/config/.env.development
+/config/.env.production
