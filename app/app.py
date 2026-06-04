@@ -288,7 +288,94 @@ def local_retrieve(query: str, chunks: List[Dict[str, Any]],
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Response builder (local mode — structured without LLM)
+# Gemini generation (local mode — google-generativeai SDK, just needs API key)
+# ─────────────────────────────────────────────────────────────────────────────
+
+GEMINI_LOCAL_MODEL  = "gemini-2.0-flash"
+GEMINI_REST_URL     = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    "{model}:generateContent?key={key}"
+)
+
+_SYSTEM_PROMPT = """\
+You are a healthcare coverage expert. Answer ONLY from the provided UHC policy excerpts.
+
+Return a single JSON object — no markdown fences, no extra text — with these exact keys:
+{
+  "decision": "<Covered|RequiresPA|NotCovered|Ambiguous>",
+  "validity_window": {"effective_from": "<YYYY-MM-DD or version string>", "effective_to": null},
+  "evidence": [
+    {"policy_id": "...", "section": "...", "page": <int>, "quote": "<verbatim excerpt>"}
+  ],
+  "changes": [
+    {"section": "...", "old": "<prior wording>", "new": "<new wording>"}
+  ],
+  "notes": ["<any caveats>"]
+}
+
+Rules:
+- Set decision=Ambiguous if the excerpts do not clearly answer the question.
+- evidence must cite the policy_id, section, and page from the excerpts provided.
+- changes should only be populated if the question asks about version differences.
+- Do NOT hallucinate — every claim must trace to a provided excerpt.
+"""
+
+
+def _build_context(hits: List[Dict[str, Any]]) -> str:
+    parts = []
+    for h in hits:
+        header = (
+            f"[{h.get('policy_id','')} | v{h.get('version_date','')} "
+            f"| §{h.get('section','')} | p.{h.get('page','')}]"
+        )
+        parts.append(f"{header}\n{h.get('text','')}")
+    return "\n\n---\n\n".join(parts)
+
+
+def _gemini_generate(question: str, hits: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    Call Gemini REST API directly (no SDK — just urllib + json).
+    Returns the parsed response dict, or None if key is missing / call fails.
+    """
+    import urllib.request
+    import urllib.error
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+
+    user_prompt = (
+        f"Policy excerpts:\n\n{_build_context(hits)}"
+        f"\n\n---\nQuestion: {question}\n\nJSON answer:"
+    )
+    payload = json.dumps({
+        "system_instruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+        "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"},
+    }).encode("utf-8")
+
+    url = GEMINI_REST_URL.format(model=GEMINI_LOCAL_MODEL, key=api_key)
+    req = urllib.request.Request(
+        url, data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.loads(resp.read())
+        raw = body["candidates"][0]["content"]["parts"][0]["text"]
+        # Strip markdown fences if present
+        raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+        raw = re.sub(r"\s*```$", "", raw.strip())
+        return json.loads(raw)
+    except (json.JSONDecodeError, KeyError, IndexError):
+        return None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rule-based fallback (used when no API key / generation fails)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PA_KEYWORDS  = re.compile(r"\bprior auth(?:orization)?\b|\bPA\b|\brequires? auth", re.I)
@@ -495,11 +582,13 @@ def query(question: str, mode: str = "local", k: int = 8,
 
     hits = local_retrieve(question, _chunks_cache, k=k)
 
-    decision  = _infer_decision(question, hits)
-    evidence  = _build_evidence(hits)
-    validity  = _build_validity(hits)
-    changes: List[Dict[str, str]] = []
+    dense_active = _get_embedder() is not None
+    retrieval_label = (
+        f"dense={DENSE_WEIGHT}+bm25={BM25_WEIGHT}+MMR" if dense_active else "bm25+MMR"
+    )
 
+    # ── version diffs (always computed locally) ──────────────────────────────
+    changes: List[Dict[str, str]] = []
     if old_version and new_version and hits:
         policy_id = hits[0].get("policy_id", "UHC-PA-COMM")
         diffs = compute_diff(policy_id, old_version, new_version)
@@ -511,21 +600,57 @@ def query(question: str, mode: str = "local", k: int = 8,
                     "new": d.get("new", "")[:200],
                 })
 
-    model_loaded = _get_embedder() is not None
-    mode_label   = f"local-hybrid (dense={DENSE_WEIGHT}+bm25={BM25_WEIGHT}+MMR)" if model_loaded else "local-bm25"
+    # ── grounding helper (shared by both paths) ───────────────────────────────
+    def _ground_score(answer_text: str) -> float:
+        ev_tokens: set = set()
+        for h in hits:
+            ev_tokens |= set(re.findall(r"[a-z0-9\-]{3,}", h.get("text", "").lower()))
+        sents = re.split(r"(?<=[.!?])\s+", answer_text.strip())
+        if not sents or not ev_tokens:
+            return 0.0
+        supported = sum(
+            1 for s in sents
+            if len(set(re.findall(r"[a-z0-9\-]{3,}", s.lower())) & ev_tokens)
+               / max(1, len(re.findall(r"[a-z0-9\-]{3,}", s.lower()))) >= 0.15
+        )
+        return supported / max(1, len(sents))
 
-    resp = {
+    # ── Gemini generation ─────────────────────────────────────────────────────
+    gen_resp = _gemini_generate(question, hits)
+    if gen_resp is not None:
+        gen_resp.setdefault("changes", changes or gen_resp.get("changes", []))
+        gen_resp.setdefault("notes", [])
+        # Compute grounding score over the raw quoted evidence in the response
+        answer_text = " ".join(
+            e.get("quote", "") for e in gen_resp.get("evidence", [])
+        )
+        ground = _ground_score(answer_text)
+        gen_resp["notes"] = [
+            n for n in gen_resp["notes"]
+            if not n.startswith("GroundingScore") and not n.startswith("Mode")
+        ]
+        gen_resp["notes"].insert(0, f"Mode: local-hybrid ({retrieval_label}+Gemini)")
+        gen_resp["notes"].append(f"GroundingScore: {ground:.2f}")
+        gen_resp["notes"].append(f"Model: {GEMINI_LOCAL_MODEL}")
+        gen_resp["notes"].append(f"RetrievedChunks: {len(hits)}")
+        return gen_resp
+
+    # ── rule-based fallback (no API key or generation error) ─────────────────
+    decision = _infer_decision(question, hits)
+    evidence = _build_evidence(hits)
+    validity = _build_validity(hits)
+
+    return {
         "decision": decision,
         "validity_window": validity,
         "evidence": evidence,
         "changes": changes,
         "notes": [
-            f"Mode: {mode_label}",
+            f"Mode: local-{retrieval_label} (rule-based; set GEMINI_API_KEY for LLM generation)",
             f"RetrievedChunks: {len(hits)}",
             f"TopScore: {hits[0]['score'] if hits else 0}",
         ],
     }
-    return resp
 
 
 # ─────────────────────────────────────────────────────────────────────────────
