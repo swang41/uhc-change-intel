@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UHC Change Intelligence</title>
+  <style>
+    /* ── Reset & base ─────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --blue:    #0066cc;
+      --blue-lt: #e8f0fb;
+      --green:   #1a7f4b;
+      --green-lt:#e6f4ed;
+      --yellow:  #b45309;
+      --yellow-lt:#fef9e7;
+      --red:     #b91c1c;
+      --red-lt:  #fef2f2;
+      --gray:    #64748b;
+      --border:  #e2e8f0;
+      --bg:      #f8fafc;
+      --card:    #ffffff;
+      --text:    #1e293b;
+      --radius:  10px;
+      --shadow:  0 1px 3px rgba(0,0,0,.10), 0 1px 2px rgba(0,0,0,.06);
+    }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    /* ── Header ───────────────────────────────────────────────────── */
+    header {
+      background: var(--blue); color: #fff;
+      padding: 16px 32px; display: flex; align-items: center; gap: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.15);
+    }
+    header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -.3px; }
+    header p  { font-size: .8rem; opacity: .85; margin-top: 2px; }
+    .badge {
+      margin-left: auto; font-size: .72rem; padding: 4px 10px;
+      border-radius: 20px; background: rgba(255,255,255,.2);
+      white-space: nowrap;
+    }
+
+    /* ── Layout ───────────────────────────────────────────────────── */
+    .layout { display: grid; grid-template-columns: 340px 1fr;
+              gap: 24px; padding: 28px 32px; max-width: 1200px; margin: 0 auto; }
+    @media(max-width:900px) { .layout { grid-template-columns: 1fr; } }
+
+    /* ── Card ─────────────────────────────────────────────────────── */
+    .card { background: var(--card); border-radius: var(--radius);
+            border: 1px solid var(--border); box-shadow: var(--shadow); padding: 20px; }
+    .card h2 { font-size: .85rem; font-weight: 600; text-transform: uppercase;
+               letter-spacing: .06em; color: var(--gray); margin-bottom: 14px; }
+
+    /* ── Form controls ────────────────────────────────────────────── */
+    label { display: block; font-size: .82rem; font-weight: 500;
+            color: var(--gray); margin-bottom: 5px; margin-top: 12px; }
+    label:first-of-type { margin-top: 0; }
+    input[type=text], select, textarea {
+      width: 100%; padding: 9px 12px; font-size: .9rem;
+      border: 1px solid var(--border); border-radius: 7px;
+      background: #fff; color: var(--text); outline: none;
+      transition: border-color .15s;
+    }
+    input[type=text]:focus, select:focus, textarea:focus {
+      border-color: var(--blue); box-shadow: 0 0 0 3px rgba(0,102,204,.12);
+    }
+    textarea { resize: vertical; min-height: 72px; font-family: inherit; }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    /* ── Buttons ──────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 10px 18px; border-radius: 7px; font-size: .9rem;
+      font-weight: 600; cursor: pointer; border: none; transition: .15s;
+    }
+    .btn-primary { background: var(--blue); color: #fff; width: 100%; justify-content: center; margin-top: 14px; }
+    .btn-primary:hover { background: #0052a3; }
+    .btn-primary:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-secondary { background: #f1f5f9; color: var(--text); border: 1px solid var(--border); }
+    .btn-secondary:hover { background: #e2e8f0; }
+
+    /* ── Separator ────────────────────────────────────────────────── */
+    .sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+
+    /* ── Decision badge ───────────────────────────────────────────── */
+    .decision-badge {
+      display: inline-block; padding: 6px 16px; border-radius: 20px;
+      font-weight: 700; font-size: 1rem; letter-spacing: .02em;
+    }
+    .decision-RequiresPA  { background: var(--yellow-lt); color: var(--yellow); }
+    .decision-Covered     { background: var(--green-lt);  color: var(--green);  }
+    .decision-NotCovered  { background: var(--red-lt);    color: var(--red);    }
+    .decision-Ambiguous   { background: #f1f5f9;          color: var(--gray);   }
+
+    /* ── Evidence list ────────────────────────────────────────────── */
+    .ev-list { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+    .ev-item { background: var(--blue-lt); border-left: 3px solid var(--blue);
+               border-radius: 6px; padding: 12px 14px; }
+    .ev-meta { font-size: .78rem; color: var(--blue); font-weight: 600; margin-bottom: 5px; }
+    .ev-quote { font-size: .85rem; color: #334155; font-style: italic; line-height: 1.5; }
+
+    /* ── Diff block ───────────────────────────────────────────────── */
+    .diff-block { margin-top: 10px; }
+    .diff-section-title { font-size: .82rem; font-weight: 600; color: var(--text);
+                          margin: 10px 0 4px; }
+    pre.diff {
+      font-family: "SF Mono", "Fira Code", monospace; font-size: .78rem;
+      background: #0f172a; color: #cbd5e1; border-radius: 8px;
+      padding: 14px; overflow-x: auto; line-height: 1.55; white-space: pre-wrap;
+    }
+    pre.diff .add  { color: #86efac; }
+    pre.diff .del  { color: #fca5a5; }
+    pre.diff .hdr  { color: #67e8f9; }
+    pre.diff .info { color: #94a3b8; }
+
+    /* ── Notes ────────────────────────────────────────────────────── */
+    .notes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    .note-chip { font-size: .74rem; background: #f1f5f9; color: var(--gray);
+                 padding: 3px 10px; border-radius: 12px; border: 1px solid var(--border); }
+
+    /* ── Spinner ──────────────────────────────────────────────────── */
+    .spinner { display: none; width: 20px; height: 20px; border-radius: 50%;
+               border: 2px solid #fff; border-top-color: transparent;
+               animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Empty / error states ─────────────────────────────────────── */
+    .empty { text-align: center; padding: 60px 24px; color: var(--gray); }
+    .empty svg { opacity: .25; margin-bottom: 12px; }
+    .empty p { font-size: .9rem; }
+    .error-box { background: var(--red-lt); border: 1px solid #fecaca;
+                 border-radius: 8px; padding: 14px; color: var(--red);
+                 font-size: .88rem; margin-top: 14px; }
+
+    /* ── Tabs ─────────────────────────────────────────────────────── */
+    .tabs { display: flex; gap: 2px; background: #f1f5f9;
+            border-radius: 8px; padding: 3px; margin-bottom: 18px; }
+    .tab-btn { flex: 1; padding: 8px 0; border: none; background: transparent;
+               border-radius: 6px; font-size: .85rem; font-weight: 500;
+               color: var(--gray); cursor: pointer; transition: .15s; }
+    .tab-btn.active { background: #fff; color: var(--text);
+                      box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Validity window ──────────────────────────────────────────── */
+    .validity { font-size: .82rem; color: var(--gray); margin-top: 6px; }
+    .validity strong { color: var(--text); }
+
+    /* ── Sample queries ───────────────────────────────────────────── */
+    .sample-btn {
+      display: block; width: 100%; text-align: left;
+      padding: 8px 12px; margin-bottom: 6px; border-radius: 6px;
+      border: 1px solid var(--border); background: #fff;
+      font-size: .82rem; color: var(--text); cursor: pointer;
+      transition: .12s;
+    }
+    .sample-btn:hover { background: var(--blue-lt); border-color: var(--blue); color: var(--blue); }
+    .sample-btn:last-child { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>UHC Change Intelligence</h1>
+    <p>Version-aware RAG · Prior Authorization &amp; Coverage Policies</p>
+  </div>
+  <span class="badge">
+    {{ n_chunks }} chunks · {{ mode }} mode
+    {% if has_key %} · Gemini ✓{% else %} · rule-based{% endif %}
+  </span>
+</header>
+
+<div class="layout">
+
+  <!-- ── Left panel: controls ─────────────────────────── -->
+  <aside>
+    <!-- Tabs -->
+    <div class="tabs" role="tablist">
+      <button class="tab-btn active" data-tab="query">Query</button>
+      <button class="tab-btn"        data-tab="diff">Diff</button>
+    </div>
+
+    <!-- Query panel -->
+    <div id="tab-query" class="tab-panel active">
+      <div class="card">
+        <h2>Ask a Coverage Question</h2>
+
+        <label for="question">Question</label>
+        <textarea id="question" rows="3"
+          placeholder="Does rituximab require prior authorization?"></textarea>
+
+        <label for="top-k">Top-K chunks</label>
+        <select id="top-k">
+          <option value="5">5</option>
+          <option value="8" selected>8 (default)</option>
+          <option value="12">12</option>
+        </select>
+
+        <hr class="sep" />
+        <h2>Version Comparison (optional)</h2>
+
+        <div class="row2">
+          <div>
+            <label for="old-version">Old version</label>
+            <input type="text" id="old-version" placeholder="1-1-2025" />
+          </div>
+          <div>
+            <label for="new-version">New version</label>
+            <input type="text" id="new-version" placeholder="10-1-2025" />
+          </div>
+        </div>
+
+        <button class="btn btn-primary" id="query-btn" onclick="runQuery()">
+          <span id="query-label">Search</span>
+          <span class="spinner" id="query-spinner"></span>
+        </button>
+      </div>
+
+      <!-- Sample queries -->
+      <div class="card" style="margin-top:16px;">
+        <h2>Sample Questions</h2>
+        <button class="sample-btn" onclick="setQuery(this)">Does rituximab require prior authorization?</button>
+        <button class="sample-btn" onclick="setQuery(this)">Is bariatric surgery covered without prior auth?</button>
+        <button class="sample-btn" onclick="setQuery(this)">What are the PA requirements for cardiac genetics testing?</button>
+        <button class="sample-btn" onclick="setQuery(this)">Is arthroplasty subject to prior authorization?</button>
+        <button class="sample-btn" onclick="setQuery(this)">Does preventive care require prior authorization?</button>
+      </div>
+    </div>
+
+    <!-- Diff panel -->
+    <div id="tab-diff" class="tab-panel">
+      <div class="card">
+        <h2>Compare Policy Versions</h2>
+
+        <label for="diff-policy">Policy ID</label>
+        <select id="diff-policy"></select>
+
+        <div class="row2" style="margin-top:4px;">
+          <div>
+            <label for="diff-old">Old version</label>
+            <select id="diff-old"></select>
+          </div>
+          <div>
+            <label for="diff-new">New version</label>
+            <select id="diff-new"></select>
+          </div>
+        </div>
+
+        <label for="diff-section">Section filter (optional)</label>
+        <input type="text" id="diff-section" placeholder="e.g. Bariatric surgery" />
+
+        <button class="btn btn-primary" id="diff-btn" onclick="runDiff()">
+          <span id="diff-label">Compare</span>
+          <span class="spinner" id="diff-spinner"></span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Right panel: results ─────────────────────────── -->
+  <main>
+    <div id="results">
+      <div class="empty">
+        <svg width="64" height="64" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+          <path stroke-linecap="round" stroke-linejoin="round"
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586
+               a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19
+               a2 2 0 01-2 2z"/>
+        </svg>
+        <p>Ask a coverage question or compare two policy versions.</p>
+      </div>
+    </div>
+  </main>
+
+</div>
+
+<script>
+// ── Tab switching ─────────────────────────────────────────────────────────────
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
+  });
+});
+
+// ── Load policy list for diff dropdowns ──────────────────────────────────────
+let _policies = [];
+async function loadPolicies() {
+  try {
+    const r = await fetch("/api/policies");
+    _policies = await r.json();
+    const sel = document.getElementById("diff-policy");
+    sel.innerHTML = _policies.map(p => `<option value="${p.policy_id}">${p.policy_id}</option>`).join("");
+    updateVersionDropdowns();
+  } catch(e) {}
+}
+
+function updateVersionDropdowns() {
+  const pid  = document.getElementById("diff-policy").value;
+  const pol  = _policies.find(p => p.policy_id === pid);
+  const vers = pol ? pol.versions : [];
+  const oldSel = document.getElementById("diff-old");
+  const newSel = document.getElementById("diff-new");
+  oldSel.innerHTML = vers.map(v => `<option value="${v}">${v}</option>`).join("");
+  newSel.innerHTML = vers.map(v => `<option value="${v}">${v}</option>`).join("");
+  if (vers.length > 1) newSel.selectedIndex = vers.length - 1;
+}
+document.getElementById("diff-policy").addEventListener("change", updateVersionDropdowns);
+loadPolicies();
+
+// ── Sample query filler ───────────────────────────────────────────────────────
+function setQuery(el) {
+  document.getElementById("question").value = el.textContent.trim();
+  document.querySelector('[data-tab="query"]').click();
+}
+
+// ── Query ─────────────────────────────────────────────────────────────────────
+async function runQuery() {
+  const question   = document.getElementById("question").value.trim();
+  const oldVersion = document.getElementById("old-version").value.trim() || null;
+  const newVersion = document.getElementById("new-version").value.trim() || null;
+  const topK       = parseInt(document.getElementById("top-k").value, 10);
+  if (!question) return;
+
+  setLoading("query", true);
+  try {
+    const r = await fetch("/api/query", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({question, old_version: oldVersion, new_version: newVersion, top_k: topK}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Request failed");
+    renderQuery(question, data);
+  } catch(e) {
+    renderError(e.message);
+  } finally {
+    setLoading("query", false);
+  }
+}
+
+function renderQuery(question, data) {
+  const dec = data.decision || "Ambiguous";
+  const vw  = data.validity_window || {};
+  const ev  = data.evidence || [];
+  const ch  = data.changes  || [];
+  const notes = data.notes  || [];
+
+  let html = `
+    <div class="card" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:.78rem;color:var(--gray);font-weight:600;margin-bottom:6px;">DECISION</div>
+          <span class="decision-badge decision-${dec}">${dec}</span>
+          <div class="validity">
+            Effective <strong>${vw.effective_from || "unknown"}</strong>
+            → ${vw.effective_to ? `<strong>${vw.effective_to}</strong>` : "present"}
+          </div>
+        </div>
+        <div style="flex:1;min-width:200px;">
+          <div style="font-size:.78rem;color:var(--gray);font-weight:600;margin-bottom:6px;">QUESTION</div>
+          <div style="font-size:.95rem;line-height:1.5;">${escHtml(question)}</div>
+        </div>
+      </div>
+      <div class="notes">${notes.map(n => `<span class="note-chip">${escHtml(n)}</span>`).join("")}</div>
+    </div>`;
+
+  if (ev.length) {
+    html += `<div class="card" style="margin-bottom:16px;">
+      <h2>Evidence (${ev.length} chunk${ev.length !== 1 ? "s" : ""})</h2>
+      <ul class="ev-list">`;
+    ev.forEach((e, i) => {
+      html += `<li class="ev-item">
+        <div class="ev-meta">
+          [${i+1}] ${escHtml(e.policy_id)} &nbsp;·&nbsp; v${escHtml(e.version_date||"")}
+          &nbsp;·&nbsp; §${escHtml(e.section||"")} &nbsp;·&nbsp; p.${e.page||"?"}
+          ${e.score != null ? `<span style="float:right;font-weight:400;">score ${(+e.score).toFixed(4)}</span>` : ""}
+        </div>
+        <div class="ev-quote">"${escHtml((e.quote||"").slice(0,300))}"</div>
+      </li>`;
+    });
+    html += `</ul></div>`;
+  }
+
+  if (ch.length) {
+    html += `<div class="card">
+      <h2>Version Changes Detected (${ch.length})</h2>
+      <div class="diff-block">`;
+    ch.forEach(c => {
+      const diffLines = (c.diff || [c.old && `- ${c.old}`, c.new && `+ ${c.new}`])
+        .filter(Boolean).join("\n").split("\n");
+      html += `<div class="diff-section-title">§ ${escHtml(c.section)}</div>
+        <pre class="diff">${diffLines.map(colorDiffLine).join("\n")}</pre>`;
+    });
+    html += `</div></div>`;
+  }
+
+  document.getElementById("results").innerHTML = html;
+}
+
+// ── Diff ──────────────────────────────────────────────────────────────────────
+async function runDiff() {
+  const policy_id   = document.getElementById("diff-policy").value;
+  const old_version = document.getElementById("diff-old").value;
+  const new_version = document.getElementById("diff-new").value;
+  const section     = document.getElementById("diff-section").value.trim() || null;
+  if (!policy_id || !old_version || !new_version) return;
+
+  setLoading("diff", true);
+  try {
+    const r = await fetch("/api/diff", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({policy_id, old_version, new_version, section}),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || "Request failed");
+    renderDiff(policy_id, old_version, new_version, data);
+  } catch(e) {
+    renderError(e.message);
+  } finally {
+    setLoading("diff", false);
+  }
+}
+
+function renderDiff(policy, oldV, newV, data) {
+  const diffs = data.diffs || [];
+  if (!diffs.length || (diffs.length === 1 && diffs[0].diff === "No textual changes detected.")) {
+    document.getElementById("results").innerHTML = `
+      <div class="card"><div class="empty" style="padding:30px;">
+        <p>No textual changes detected between ${escHtml(oldV)} and ${escHtml(newV)}.</p>
+      </div></div>`;
+    return;
+  }
+
+  let html = `<div class="card">
+    <h2>${escHtml(policy)} &nbsp;·&nbsp; ${escHtml(oldV)} → ${escHtml(newV)}
+        &nbsp;·&nbsp; ${diffs.length} section${diffs.length !== 1 ? "s" : ""} changed</h2>
+    <div class="diff-block">`;
+  diffs.forEach(d => {
+    if (d.error) {
+      html += `<div class="error-box">${escHtml(d.error)}</div>`;
+      return;
+    }
+    const lines = (d.diff || "").split("\n");
+    html += `<div class="diff-section-title">§ ${escHtml(d.section)}</div>
+      <pre class="diff">${lines.map(colorDiffLine).join("\n")}</pre>`;
+  });
+  html += `</div></div>`;
+  document.getElementById("results").innerHTML = html;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+                      .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
+function colorDiffLine(line) {
+  const e = escHtml(line);
+  if (line.startsWith("+++") || line.startsWith("---")) return `<span class="hdr">${e}</span>`;
+  if (line.startsWith("+"))  return `<span class="add">${e}</span>`;
+  if (line.startsWith("-"))  return `<span class="del">${e}</span>`;
+  if (line.startsWith("@@")) return `<span class="info">${e}</span>`;
+  return e;
+}
+
+function setLoading(which, on) {
+  document.getElementById(`${which}-btn`).disabled = on;
+  document.getElementById(`${which}-label`).textContent = on ? "Working…" : (which === "query" ? "Search" : "Compare");
+  document.getElementById(`${which}-spinner`).style.display = on ? "block" : "none";
+}
+
+function renderError(msg) {
+  document.getElementById("results").innerHTML =
+    `<div class="error-box"><strong>Error:</strong> ${escHtml(msg)}</div>`;
+}
+
+// ── Enter key submits query ───────────────────────────────────────────────────
+document.getElementById("question").addEventListener("keydown", e => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) runQuery();
+});
+</script>
+</body>
+</html>

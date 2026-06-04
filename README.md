@@ -111,7 +111,7 @@ Dense-only hits (BM25=0) and BM25-dominated hits coexist, confirming both signal
 
 ## Quick Start
 
-### 1 — Run the full local pipeline (hybrid retrieval + Gemini generation)
+### 1 — Launch the web UI
 
 ```bash
 git clone https://github.com/swang41/uhc-change-intel
@@ -121,12 +121,12 @@ pip install -r requirements.txt
 # Add your Gemini API key (free at aistudio.google.com)
 echo "GEMINI_API_KEY=your_key_here" > config/.env
 
-python app/app.py demo
+python app/server.py        # open http://localhost:5000
 ```
 
-> Without `GEMINI_API_KEY`, the CLI still runs but returns rule-based decisions instead of LLM-generated answers.
+> Without `GEMINI_API_KEY` the server still works — rule-based decisions are returned instead of LLM-generated answers.
 
-### 2 — Ask a specific question
+### 2 — CLI demo (no browser needed)
 
 ```bash
 # local hybrid retrieval + Gemini generation (default)
