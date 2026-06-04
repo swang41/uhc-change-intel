@@ -29,12 +29,21 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "config"))
 
-CHUNKS_DIR  = ROOT / "data" / "chunks"
-PARSED_DIR  = ROOT / "data" / "parsed"
-SCHEMA_FILE = ROOT / "schemas" / "response.schema.json"
+CHUNKS_DIR     = ROOT / "data" / "chunks"
+PARSED_DIR     = ROOT / "data" / "parsed"
+SCHEMA_FILE    = ROOT / "schemas" / "response.schema.json"
+EMBED_CACHE    = ROOT / "data" / "embeddings.npy"
+EMBED_META     = ROOT / "data" / "embeddings_meta.json"
+
+# Hybrid weighting: dense score weight vs BM25 score weight
+DENSE_WEIGHT   = 0.6
+BM25_WEIGHT    = 0.4
+# MMR: balance relevance vs diversity (1.0 = pure relevance, 0.0 = pure diversity)
+MMR_LAMBDA     = 0.7
+EMBED_MODEL    = "all-MiniLM-L6-v2"   # 22 MB, fast, good semantic quality
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Local BM25-style retriever (no GCP required)
+# Chunk loader
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _load_chunks(chunks_dir: Path) -> List[Dict[str, Any]]:
@@ -52,56 +61,225 @@ def _load_chunks(chunks_dir: Path) -> List[Dict[str, Any]]:
     return docs
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Dense retrieval — sentence-transformers + cosine similarity
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _get_embedder():
+    """
+    Lazy-load the sentence-transformers model (cached after first call).
+    Returns None and falls back to BM25-only if the model cannot be loaded
+    (not installed, no internet, or restricted network).
+    """
+    if not hasattr(_get_embedder, "_model"):
+        try:
+            from sentence_transformers import SentenceTransformer
+            _get_embedder._model = SentenceTransformer(EMBED_MODEL)
+        except Exception:
+            _get_embedder._model = None
+    return _get_embedder._model
+
+
+def _load_or_build_embeddings(chunks: List[Dict[str, Any]]):
+    """
+    Return (matrix, chunk_ids) where matrix is (N, D) float32 numpy array.
+    Builds and caches to disk on first call; reuses cache if chunk count matches.
+    """
+    import numpy as np
+
+    model = _get_embedder()
+    if model is None:
+        return None, []
+
+    # Cache hit: same number of chunks → reuse
+    if EMBED_CACHE.exists() and EMBED_META.exists():
+        meta = json.loads(EMBED_META.read_text())
+        if meta.get("n_chunks") == len(chunks):
+            matrix = np.load(str(EMBED_CACHE))
+            return matrix, meta["chunk_ids"]
+
+    # Build embeddings
+    print("  [dense] Building embeddings for corpus … ", end="", flush=True)
+    texts = [c.get("text", "") for c in chunks]
+    matrix = model.encode(texts, batch_size=64, show_progress_bar=False,
+                          convert_to_numpy=True, normalize_embeddings=True)
+    chunk_ids = [c.get("chunk_id", str(i)) for i, c in enumerate(chunks)]
+
+    np.save(str(EMBED_CACHE), matrix.astype("float32"))
+    EMBED_META.write_text(json.dumps({"n_chunks": len(chunks), "chunk_ids": chunk_ids}))
+    print(f"done ({len(chunks)} chunks, dim={matrix.shape[1]})")
+    return matrix.astype("float32"), chunk_ids
+
+
+def _dense_scores(query: str, matrix) -> "np.ndarray":
+    """Return cosine similarities for query against all rows of matrix (already L2-normed)."""
+    import numpy as np
+    model = _get_embedder()
+    if model is None or matrix is None:
+        return np.zeros(0)
+    q_vec = model.encode([query], normalize_embeddings=True)[0]   # shape (D,)
+    return matrix @ q_vec   # cosine sim, shape (N,)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BM25 retrieval
+# ─────────────────────────────────────────────────────────────────────────────
+
 def _tokenize(text: str) -> List[str]:
     return re.findall(r"[a-z0-9\-]+", (text or "").lower())
 
 
-def _bm25_score(query_tokens: List[str], doc_tokens: List[str],
-                avgdl: float, k1: float = 1.5, b: float = 0.75) -> float:
-    freq: Dict[str, int] = {}
-    for t in doc_tokens:
-        freq[t] = freq.get(t, 0) + 1
-    dl = len(doc_tokens)
-    score = 0.0
+def _bm25_scores(query_tokens: List[str], doc_tokens_list: List[List[str]],
+                 k1: float = 1.5, b: float = 0.75) -> List[float]:
+    """Vectorised BM25 over all documents, returns a score per doc."""
+    import math
+    N = len(doc_tokens_list)
+    avgdl = sum(len(d) for d in doc_tokens_list) / max(1, N)
+
+    # IDF per query term (proper IDF over corpus)
+    df: Dict[str, int] = {}
+    for tokens in doc_tokens_list:
+        for t in set(tokens):
+            df[t] = df.get(t, 0) + 1
+
+    scores = [0.0] * N
     for t in set(query_tokens):
-        tf = freq.get(t, 0)
-        if tf == 0:
-            continue
-        idf = math.log(1 + 1)  # simplified; corpus too small for real IDF
-        tf_norm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * dl / max(1, avgdl)))
-        score += idf * tf_norm
-    return score
+        idf = math.log((N - df.get(t, 0) + 0.5) / (df.get(t, 0) + 0.5) + 1)
+        for i, tokens in enumerate(doc_tokens_list):
+            tf = tokens.count(t)
+            if tf == 0:
+                continue
+            dl = len(tokens)
+            tf_norm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * dl / max(1, avgdl)))
+            scores[i] += idf * tf_norm
+    return scores
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MMR diversity re-ranking
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _mmr(query_vec, candidate_indices: List[int], matrix,
+         k: int, lmbda: float = MMR_LAMBDA) -> List[int]:
+    """
+    Maximal Marginal Relevance: balance relevance to query vs diversity among
+    selected chunks.  candidate_indices are pre-sorted by hybrid score.
+    Returns up to k indices in MMR order.
+    """
+    import numpy as np
+    if matrix is None or len(candidate_indices) == 0:
+        return candidate_indices[:k]
+
+    selected: List[int] = []
+    remaining = list(candidate_indices)
+
+    q_sims = (matrix[remaining] @ query_vec)  # cosine to query
+
+    while remaining and len(selected) < k:
+        if not selected:
+            # First pick: highest query similarity
+            best = int(np.argmax(q_sims))
+        else:
+            sel_mat = matrix[selected]
+            # For each candidate: max cosine sim to already-selected
+            max_sim_to_sel = (matrix[remaining] @ sel_mat.T).max(axis=1)
+            mmr_scores = lmbda * q_sims - (1 - lmbda) * max_sim_to_sel
+            best = int(np.argmax(mmr_scores))
+
+        selected.append(remaining[best])
+        remaining.pop(best)
+        q_sims = np.delete(q_sims, best)
+
+    return selected
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hybrid retriever: dense + BM25 → fuse → MMR
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Module-level cache so embeddings are only built once per process
+_embed_matrix = None
+_embed_chunk_ids: List[str] = []
 
 
 def local_retrieve(query: str, chunks: List[Dict[str, Any]],
                    k: int = 8) -> List[Dict[str, Any]]:
-    """BM25-style retrieval over local chunk store."""
+    """
+    Hybrid retrieval:
+      1. Dense cosine similarity (sentence-transformers all-MiniLM-L6-v2)
+      2. BM25 keyword matching with proper IDF
+      3. Reciprocal Rank Fusion to combine scores
+      4. MMR diversity re-ranking on the top-40 candidates
+    Falls back to BM25-only if sentence-transformers is not installed.
+    """
+    import numpy as np
+
+    global _embed_matrix, _embed_chunk_ids
+
     q_tokens = _tokenize(query)
-    if not q_tokens:
-        return []
-
     doc_tokens_list = [_tokenize(c.get("text", "")) for c in chunks]
-    avgdl = sum(len(t) for t in doc_tokens_list) / max(1, len(doc_tokens_list))
 
-    scored = []
-    for i, chunk in enumerate(chunks):
-        score = _bm25_score(q_tokens, doc_tokens_list[i], avgdl)
-        if score > 0:
-            scored.append((score, i))
+    # ── BM25 ──────────────────────────────────────────────────────────────
+    bm25_raw = _bm25_scores(q_tokens, doc_tokens_list)
+    bm25_max = max(bm25_raw) if bm25_raw else 1.0
+    bm25_norm = [s / max(bm25_max, 1e-9) for s in bm25_raw]
 
-    scored.sort(reverse=True)
+    # ── Dense ─────────────────────────────────────────────────────────────
+    if _embed_matrix is None:
+        _embed_matrix, _embed_chunk_ids = _load_or_build_embeddings(chunks)
 
-    # MMR-style dedup: limit to 2 chunks per policy+version
+    model = _get_embedder()
+    use_dense = model is not None and _embed_matrix is not None and len(_embed_matrix) == len(chunks)
+
+    if use_dense:
+        q_vec = model.encode([query], normalize_embeddings=True)[0]
+        dense_raw = (_embed_matrix @ q_vec).tolist()
+        dense_min = min(dense_raw)
+        dense_max = max(dense_raw)
+        dense_norm = [(s - dense_min) / max(dense_max - dense_min, 1e-9) for s in dense_raw]
+    else:
+        dense_norm = [0.0] * len(chunks)
+        q_vec = None
+
+    # ── Reciprocal Rank Fusion ────────────────────────────────────────────
+    # RRF score = sum(1 / (rank + 60)) over each ranking
+    def rrf_ranks(scores: List[float]) -> List[float]:
+        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        rrf = [0.0] * len(scores)
+        for rank, idx in enumerate(ranked):
+            rrf[idx] = 1.0 / (rank + 60)
+        return rrf
+
+    rrf_dense = rrf_ranks(dense_norm)
+    rrf_bm25  = rrf_ranks(bm25_norm)
+
+    hybrid = [
+        DENSE_WEIGHT * rrf_dense[i] + BM25_WEIGHT * rrf_bm25[i]
+        for i in range(len(chunks))
+    ]
+
+    # Top-40 candidates for MMR
+    top40 = sorted(range(len(chunks)), key=lambda i: hybrid[i], reverse=True)[:40]
+
+    # ── MMR diversity ─────────────────────────────────────────────────────
+    if use_dense and q_vec is not None:
+        selected_indices = _mmr(q_vec, top40, _embed_matrix, k=k * 2)
+    else:
+        selected_indices = top40[: k * 2]
+
+    # ── Build result list, limit per policy+version ───────────────────────
     seen: Dict[str, int] = {}
     results = []
-    for score, idx in scored:
+    for idx in selected_indices:
         chunk = chunks[idx]
         key = f"{chunk.get('policy_id')}_{chunk.get('version_date')}"
         if seen.get(key, 0) >= 2:
             continue
         seen[key] = seen.get(key, 0) + 1
         result = dict(chunk)
-        result["score"] = round(score, 4)
+        result["score"]       = round(hybrid[idx], 6)
+        result["score_dense"] = round(dense_norm[idx] if use_dense else 0.0, 4)
+        result["score_bm25"]  = round(bm25_norm[idx], 4)
         results.append(result)
         if len(results) >= k:
             break
@@ -333,13 +511,16 @@ def query(question: str, mode: str = "local", k: int = 8,
                     "new": d.get("new", "")[:200],
                 })
 
+    model_loaded = _get_embedder() is not None
+    mode_label   = f"local-hybrid (dense={DENSE_WEIGHT}+bm25={BM25_WEIGHT}+MMR)" if model_loaded else "local-bm25"
+
     resp = {
         "decision": decision,
         "validity_window": validity,
         "evidence": evidence,
         "changes": changes,
         "notes": [
-            f"Mode: local-BM25",
+            f"Mode: {mode_label}",
             f"RetrievedChunks: {len(hits)}",
             f"TopScore: {hits[0]['score'] if hits else 0}",
         ],
@@ -479,8 +660,10 @@ def cmd_demo(args: argparse.Namespace) -> None:
     if _chunks_cache is None:
         _chunks_cache = _load_chunks(CHUNKS_DIR)
 
+    model_ready = _get_embedder() is not None
+    retrieval_label = "dense+bm25+MMR" if model_ready else "bm25-only"
     print(_color("\n  UHC Change Intelligence — DEMO RUN", "1;34"))
-    print(_color(f"  Mode: {args.mode}  |  Chunks loaded: {len(_chunks_cache)}", "90"))
+    print(_color(f"  Mode: {args.mode}  |  Retrieval: {retrieval_label}  |  Chunks: {len(_chunks_cache)}", "90"))
 
     for question, old_v, new_v in demo_questions:
         t0 = time.time()

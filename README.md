@@ -11,7 +11,7 @@ A **version-aware RAG system** that ingests UnitedHealthcare (UHC) Commercial pr
 | Capability | Details |
 |---|---|
 | **Version-aware RAG** | Chunks are tagged with `policy_id`, `version_date`, `section`, and `page` — every answer cites its source |
-| **Hybrid retrieval** | Dense (Vertex AI embedding) + BM25 keyword, combined with MMR diversity selection |
+| **Hybrid retrieval** | Dense (sentence-transformers) + BM25 with proper IDF, fused via Reciprocal Rank Fusion + MMR diversity |
 | **LLM re-ranking** | Gemini 1.5 Pro scores each candidate chunk; domain-aware section boosts |
 | **Diff tracking** | Unified-diff of parsed sections between policy versions detects wording changes |
 | **Strict JSON output** | Responses validated against `schemas/response.schema.json` (decision, evidence, validity window) |
@@ -226,8 +226,8 @@ uhc-change-intel/
 
 **Why version-aware metadata?**  Healthcare policies change quarterly. Tagging every chunk with `policy_id`, `version_date`, and `effective_from` enables the system to answer "what changed?" as a first-class operation, not an afterthought.
 
-**Why hybrid retrieval?**  Dense embeddings miss exact procedure codes (CPT, HCPCS); keyword search misses semantic paraphrases. MMR prevents five chunks from the same paragraph dominating results.
+**Why hybrid retrieval?**  Dense embeddings (all-MiniLM-L6-v2) capture semantic similarity — "prior authorization" matches "PA required" — while BM25 with proper IDF catches exact CPT/HCPCS codes and drug names. Reciprocal Rank Fusion merges the two rankings without needing to tune a score threshold. MMR then ensures the final top-k spans multiple policies and sections rather than repeating the same paragraph.
 
-**Why an offline demo mode?**  Pre-parsed JSONL makes the project self-contained for interviews and demos without requiring cloud credentials or incurring API costs.
+**Why an offline demo mode?**  Pre-parsed JSONL makes the project self-contained for interviews and demos without requiring cloud credentials or incurring API costs. The local pipeline automatically uses full hybrid search (dense + BM25 + MMR) when `sentence-transformers` is installed, and gracefully falls back to BM25-only otherwise.
 
 **Why strict JSON schema?**  Downstream consumers (billing systems, clinical workflows) need machine-readable, predictable output — not free-text summaries.

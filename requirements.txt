@@ -2,6 +2,8 @@
 pypdf>=4.0
 pdfminer.six>=20221105
 tiktoken>=0.6
+numpy>=1.26
+sentence-transformers>=3.0   # local dense embeddings (all-MiniLM-L6-v2)
 
 # GCP backend (only needed for --mode gcp)
 google-cloud-aiplatform>=1.50

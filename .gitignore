@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 *.pyo
 
+# Generated embedding cache (rebuilt automatically from chunks)
+data/embeddings.npy
+data/embeddings_meta.json
+
 # env files
 /config/.env
 /config/.env.local
