@@ -8,6 +8,9 @@ sentence-transformers>=3.0   # local dense embeddings (all-MiniLM-L6-v2)
 # LLM generation — local mode uses Gemini REST API via urllib (stdlib, no extra dep)
 # Set GEMINI_API_KEY in config/.env (free key at https://aistudio.google.com/apikey)
 
+# Web UI
+flask>=3.0
+
 # GCP backend (only needed for --mode gcp)
 google-cloud-aiplatform>=1.50
 vertexai>=1.50
