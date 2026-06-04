@@ -1,0 +1,14 @@
+# Core (always required)
+pypdf>=4.0
+pdfminer.six>=20221105
+tiktoken>=0.6
+
+# GCP backend (only needed for --mode gcp)
+google-cloud-aiplatform>=1.50
+vertexai>=1.50
+
+# Config
+python-dotenv>=1.0
+
+# Dev / eval
+pytest>=8.0

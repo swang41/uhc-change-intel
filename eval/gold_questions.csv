@@ -1,0 +1,16 @@
+question,expected_decision,expected_section,notes
+Does rituximab require prior authorization for UHC commercial plans?,RequiresPA,Prior Authorization,Drug policy
+Is Leqvio (inclisiran) covered under UHC commercial plans?,RequiresPA,Coverage Criteria,Drug policy
+Does bariatric surgery require prior authorization?,RequiresPA,Bariatric surgery,PA list
+Is arthroplasty (joint replacement) subject to prior authorization?,RequiresPA,Arthroplasty,PA list
+Does cardiac genetics testing require prior authorization?,RequiresPA,Genetic Testing,Medical policy
+Are bone growth stimulators covered under UHC?,RequiresPA,Bone growth stimulator,PA list
+Does breast reconstruction (non-mastectomy) require prior authorization?,RequiresPA,Breast reconstruction,PA list
+Is MRI or CT imaging for soft tissue sarcoma covered?,RequiresPA,Imaging,Medical policy
+Does ablation for musculoskeletal pain require prior authorization?,RequiresPA,Ablation,Medical policy
+Are abnormal uterine bleeding treatments covered?,RequiresPA,Coverage Criteria,GYN policy
+Is durable medical equipment (DME) repair covered without prior auth?,RequiresPA,Coverage Criteria,DME policy
+Does preventive care require prior authorization?,Covered,Preventive Services,Preventive policy
+Are emergency services subject to prior authorization requirements?,Covered,Introduction,PA list
+What prior authorizations are required for arthroscopy?,RequiresPA,Arthroscopy,PA list
+Are colony-stimulating factor drugs for cancer patients subject to prior auth?,RequiresPA,Cancer supportive care,PA list
